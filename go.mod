@@ -10,4 +10,5 @@ require (
 	github.com/hailocab/go-geoindex v0.0.0-20160127134810-64631bfe9711
 	github.com/lithammer/shortuuid v3.0.0+incompatible
 	github.com/mitchellh/mapstructure v1.3.3
+	github.com/pkg/errors v0.9.1 // indirect
 )

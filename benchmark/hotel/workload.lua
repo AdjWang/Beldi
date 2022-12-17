@@ -1,9 +1,12 @@
-require "socket"
+-- require "luarocks.loader"
+-- require "socket"
 local JSON = require("JSON")
 local UUID = require("uuid")
-time = socket.gettime() * 1000
+-- time = socket.gettime() * 1000
+time = os.clock() * 1000
 UUID.randomseed(time)
-math.randomseed(socket.gettime() * 1000)
+-- math.randomseed(socket.gettime() * 1000)
+math.randomseed(os.clock() * 1000)
 math.random();
 math.random();
 math.random()
@@ -186,7 +189,7 @@ local function user_login()
 end
 
 request = function()
-    cur_time = math.floor(socket.gettime())
+    cur_time = math.floor(os.clock())
     local search_ratio = 0.6
     local recommend_ratio = 0.39
     local user_ratio = 0.005

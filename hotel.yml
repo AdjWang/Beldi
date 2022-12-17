@@ -1,95 +1,83 @@
-service: beldi
-
-frameworkVersion: '>=1.28.0 <2.0.0'
-
+version: 1.0
 provider:
-  name: aws
-  runtime: go1.x
-  stage: dev
-  memorySize: 1024
-  timeout: 60
-  region: us-east-1
-  disableLogs: false
-  iamRoleStatements:
-    - Effect: "Allow"
-      Action:
-        - "lambda:*"
-        - "logs:*"
-        - "cloudwatch:*"
-        - "dynamodb:*"
-        - "iam:GetPolicy"
-        - "iam:GetPolicyVersion"
-        - "iam:GetRole"
-        - "iam:GetRolePolicy"
-        - "iam:ListAttachedRolePolicies"
-        - "iam:ListRolePolicies"
-        - "iam:ListRoles"
-        - "iam:PassRole"
-      Resource:
-        - "*"
-
-package:
-  exclude:
-    - ./**
-  include:
-    - ./bin/**
-
+  name: openfaas
+  gateway: http://127.0.0.1:8080
 functions:
   geo:
-    handler: bin/hotel/geo
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/geo
+    image: localhost:5001/geo:latest
+    build_args:
+      GO111MODULE: on
   profile:
-    handler: bin/hotel/profile
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/profile
+    image: localhost:5001/profile:latest
+    build_args:
+      GO111MODULE: on
   rate:
-    handler: bin/hotel/rate
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/rate
+    image: localhost:5001/rate:latest
+    build_args:
+      GO111MODULE: on
   recommendation:
-    handler: bin/hotel/recommendation
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/recommendation
+    image: localhost:5001/recommendation:latest
+    build_args:
+      GO111MODULE: on
   user:
-    handler: bin/hotel/user
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/user
+    image: localhost:5001/user:latest
+    build_args:
+      GO111MODULE: on
   hotel:
-    handler: bin/hotel/hotel
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/hotel
+    image: localhost:5001/hotel:latest
+    build_args:
+      GO111MODULE: on
   search:
-    handler: bin/hotel/search
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/search
+    image: localhost:5001/search:latest
+    build_args:
+      GO111MODULE: on
   flight:
-    handler: bin/hotel/flight
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/flight
+    image: localhost:5001/flight:latest
+    build_args:
+      GO111MODULE: on
   order:
-    handler: bin/hotel/order
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/order
+    image: localhost:5001/order:latest
+    build_args:
+      GO111MODULE: on
   frontend:
-    handler: bin/hotel/frontend
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
+    lang: go
+    handler: ./cmd/handler/hotel/frontend
+    image: localhost:5001/frontend:latest
+    build_args:
+      GO111MODULE: on
   gateway:
-    handler: bin/hotel/gateway
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
-  hotelgc:
-    handler: bin/hotel/gc
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
-    events:
-      - schedule: rate(1 minute)
-  hotelcollector:
-    handler: bin/hotel/collector
-    maximumRetryAttempts: 0
-    maximumEventAge: 60
-    events:
-      - schedule: rate(2 minutes)
-
-
+    lang: go
+    handler: ./cmd/handler/hotel/gateway
+    image: localhost:5001/gateway:latest
+    build_args:
+      GO111MODULE: on
+  # hotelgc:
+  #   lang: go
+  #   handler: ./cmd/handler/hotel/hotelgc
+  #   image: localhost:5001/hotelgc:latest
+  #   build_args:
+  #     GO111MODULE: on
+  # hotelcollector:
+  #   lang: go
+  #   handler: ./cmd/handler/hotel/hotelcollector
+  #   image: localhost:5001/hotelcollector:latest
+  #   build_args:
+  #     GO111MODULE: on
