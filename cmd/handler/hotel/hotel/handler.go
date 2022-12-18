@@ -1,6 +1,7 @@
 package function
 
 import (
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/eniac/Beldi/data"
 	"github.com/eniac/Beldi/hotel"
 	"github.com/eniac/Beldi/pkg/beldilib"
@@ -28,5 +29,6 @@ func Handler(env *beldilib.Env) interface{} {
 // }
 
 func Handle(req []byte) string {
+	lambdacontext.FunctionName = "beldi-dev-hotel"
 	return beldilib.Wrapper(Handler)(req)
 }

@@ -1,6 +1,7 @@
 package function
 
 import (
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/eniac/Beldi/data"
 	"github.com/eniac/Beldi/pkg/beldilib"
 	"github.com/mitchellh/mapstructure"
@@ -23,6 +24,8 @@ func Handler(env *beldilib.Env) interface{} {
 	case "reserve":
 		res, _ := beldilib.SyncInvoke(env, data.Tfrontend(), rpcInput.Input)
 		return res
+	default:
+		return "nothing called"
 	}
 	return 0
 }
@@ -32,5 +35,6 @@ func Handler(env *beldilib.Env) interface{} {
 // }
 
 func Handle(req []byte) string {
+	lambdacontext.FunctionName = "beldi-dev-gateway"
 	return beldilib.Wrapper(Handler)(req)
 }

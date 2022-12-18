@@ -4,6 +4,7 @@ import (
 	// "github.com/aws/aws-lambda-go/lambda"
 	"handler/function/geo"
 
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/eniac/Beldi/data"
 	"github.com/eniac/Beldi/pkg/beldilib"
 	"github.com/mitchellh/mapstructure"
@@ -21,5 +22,6 @@ func Handler(env *beldilib.Env) interface{} {
 // }
 
 func Handle(req []byte) string {
+	lambdacontext.FunctionName = "beldi-dev-geo"
 	return beldilib.Wrapper(Handler)(req)
 }

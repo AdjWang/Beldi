@@ -1,6 +1,7 @@
 package function
 
 import (
+	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/eniac/Beldi/data"
 	"github.com/eniac/Beldi/pkg/beldilib"
 	"github.com/eniac/Beldi/rate"
@@ -19,5 +20,6 @@ func Handler(env *beldilib.Env) interface{} {
 // }
 
 func Handle(req []byte) string {
+	lambdacontext.FunctionName = "beldi-dev-rate"
 	return beldilib.Wrapper(Handler)(req)
 }

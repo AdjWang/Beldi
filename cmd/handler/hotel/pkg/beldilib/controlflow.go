@@ -134,7 +134,7 @@ func SyncInvoke(env *Env, callee string, input interface{}) (interface{}, string
 		// 	FunctionName: aws.String(fmt.Sprintf("beldi-dev-%s", callee)),
 		// 	Payload:      payload,
 		// })
-		res, err := OpenFaaSSyncInvoke(callee, payload)
+		res, err := OpenFaaSSyncInvoke(fmt.Sprintf("beldi-dev-%s", callee), payload)
 		CHECK(err)
 		ow := OutputWrapper{}
 		// ow.Deserialize(res.Payload)
@@ -181,7 +181,7 @@ func SyncInvoke(env *Env, callee string, input interface{}) (interface{}, string
 	// 	FunctionName: aws.String(fmt.Sprintf("beldi-dev-%s", callee)),
 	// 	Payload:      payload,
 	// })
-	res, err := OpenFaaSSyncInvoke(callee, payload)
+	res, err := OpenFaaSSyncInvoke(fmt.Sprintf("beldi-dev-%s", callee), payload)
 	CHECK(err)
 	ow := OutputWrapper{}
 	// ow.Deserialize(res.Payload)
@@ -231,7 +231,7 @@ func AssignedSyncInvoke(env *Env, callee string, input interface{}, stepNumber i
 	// 	FunctionName: aws.String(fmt.Sprintf("beldi-dev-%s", callee)),
 	// 	Payload:      payload,
 	// })
-	res, err := OpenFaaSSyncInvoke(callee, payload)
+	res, err := OpenFaaSSyncInvoke(fmt.Sprintf("beldi-dev-%s", callee), payload)
 	CHECK(err)
 	ow := OutputWrapper{}
 	// ow.Deserialize(res.Payload)
@@ -258,7 +258,7 @@ func AsyncInvoke(env *Env, callee string, input interface{}) string {
 		// 	Payload:        payload,
 		// 	InvocationType: aws.String("Event"),
 		// })
-		err := OpenFaaSAsyncInvoke(callee, payload)
+		err := OpenFaaSAsyncInvoke(fmt.Sprintf("beldi-dev-%s", callee), payload)
 		CHECK(err)
 		return ""
 	}
@@ -305,7 +305,7 @@ func AsyncInvoke(env *Env, callee string, input interface{}) string {
 	// 	Payload:        payload,
 	// 	InvocationType: aws.String("Event"),
 	// })
-	err := OpenFaaSAsyncInvoke(callee, payload)
+	err := OpenFaaSAsyncInvoke(fmt.Sprintf("beldi-dev-%s", callee), payload)
 	CHECK(err)
 	env.StepNumber += 1
 	return iw.InstanceId

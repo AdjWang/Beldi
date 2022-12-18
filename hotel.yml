@@ -3,79 +3,79 @@ provider:
   name: openfaas
   gateway: http://127.0.0.1:8080
 functions:
-  geo:
+  beldi-dev-geo:
     lang: go
     handler: ./cmd/handler/hotel/geo
     image: localhost:5001/geo:latest
     build_args:
       GO111MODULE: on
-  profile:
+  beldi-dev-profile:
     lang: go
     handler: ./cmd/handler/hotel/profile
     image: localhost:5001/profile:latest
     build_args:
       GO111MODULE: on
-  rate:
+  beldi-dev-rate:
     lang: go
     handler: ./cmd/handler/hotel/rate
     image: localhost:5001/rate:latest
     build_args:
       GO111MODULE: on
-  recommendation:
+  beldi-dev-recommendation:
     lang: go
     handler: ./cmd/handler/hotel/recommendation
     image: localhost:5001/recommendation:latest
     build_args:
       GO111MODULE: on
-  user:
+  beldi-dev-user:
     lang: go
     handler: ./cmd/handler/hotel/user
     image: localhost:5001/user:latest
     build_args:
       GO111MODULE: on
-  hotel:
+  beldi-dev-hotel:
     lang: go
     handler: ./cmd/handler/hotel/hotel
     image: localhost:5001/hotel:latest
     build_args:
       GO111MODULE: on
-  search:
+  beldi-dev-search:
     lang: go
     handler: ./cmd/handler/hotel/search
     image: localhost:5001/search:latest
     build_args:
       GO111MODULE: on
-  flight:
+  beldi-dev-flight:
     lang: go
     handler: ./cmd/handler/hotel/flight
     image: localhost:5001/flight:latest
     build_args:
       GO111MODULE: on
-  order:
+  beldi-dev-order:
     lang: go
     handler: ./cmd/handler/hotel/order
     image: localhost:5001/order:latest
     build_args:
       GO111MODULE: on
-  frontend:
+  beldi-dev-frontend:
     lang: go
     handler: ./cmd/handler/hotel/frontend
     image: localhost:5001/frontend:latest
     build_args:
       GO111MODULE: on
-  gateway:
+  beldi-dev-gateway:
     lang: go
     handler: ./cmd/handler/hotel/gateway
     image: localhost:5001/gateway:latest
     build_args:
       GO111MODULE: on
-  # hotelgc:
+  # beldi-dev-hotelgc:
   #   lang: go
   #   handler: ./cmd/handler/hotel/hotelgc
   #   image: localhost:5001/hotelgc:latest
   #   build_args:
   #     GO111MODULE: on
-  # hotelcollector:
+  # beldi-dev-hotelcollector:
   #   lang: go
   #   handler: ./cmd/handler/hotel/hotelcollector
   #   image: localhost:5001/hotelcollector:latest

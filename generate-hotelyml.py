@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 template = """\
-  {0}:
+  beldi-dev-{0}:
     lang: go
     handler: ./cmd/handler/hotel/{0}
     image: localhost:5001/{0}:latest

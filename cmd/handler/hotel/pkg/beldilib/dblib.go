@@ -2,9 +2,11 @@ package beldilib
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/mitchellh/mapstructure"
-	"strings"
+	"github.com/pkg/errors"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
@@ -80,7 +82,7 @@ func LibPut(tablename string, key aws.JSONValue, values aws.JSONValue) bool {
 	if err == nil {
 		return true
 	} else {
-		AssertConditionFailure(err)
+		AssertConditionFailure(errors.Wrapf(err, "TableName: %v, Key: %v", tablename, Key))
 		return false
 	}
 }
@@ -1048,4 +1050,44 @@ func BuildProjection(names []string) expression.ProjectionBuilder {
 		builder = builder.AddNames(expression.Name(name))
 	}
 	return builder
+}
+
+func ListTables() {
+	// create the input configuration instance
+	input := &dynamodb.ListTablesInput{}
+
+	fmt.Printf("Tables:\n")
+
+	for {
+		// Get the list of tables
+		result, err := DBClient.ListTables(input)
+		if err != nil {
+			if aerr, ok := err.(awserr.Error); ok {
+				switch aerr.Code() {
+				case dynamodb.ErrCodeInternalServerError:
+					fmt.Println(dynamodb.ErrCodeInternalServerError, aerr.Error())
+				default:
+					fmt.Println(aerr.Error())
+				}
+			} else {
+				// Print the error, cast err to awserr.Error to get the Code and
+				// Message from an error.
+				fmt.Println(err.Error())
+			}
+			return
+		}
+
+		for _, n := range result.TableNames {
+			fmt.Println(*n)
+		}
+
+		// assign the last read tablename as the start for our next call to the ListTables function
+		// the maximum number of table names returned in a call is 100 (default), which requires us to make
+		// multiple calls to the ListTables function to retrieve all table names
+		input.ExclusiveStartTableName = result.LastEvaluatedTableName
+
+		if result.LastEvaluatedTableName == nil {
+			break
+		}
+	}
 }
