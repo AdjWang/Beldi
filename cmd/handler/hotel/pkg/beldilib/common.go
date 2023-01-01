@@ -48,3 +48,9 @@ func CHECK(err error) {
 		panic(err)
 	}
 }
+
+var (
+	TraceReceiverEndpoint       = "http://10.0.2.15:14268/api/traces"
+	TraceReceiverServiceVersion = "1.0.0"
+	TraceReceiverEnvironment    = "beldi-dev"
+)

@@ -1,6 +1,12 @@
 package beldilib
 
+import (
+	"context"
+)
+
 type Env struct {
+	Ctx context.Context
+
 	LambdaId    string
 	InstanceId  string
 	LogTable    string

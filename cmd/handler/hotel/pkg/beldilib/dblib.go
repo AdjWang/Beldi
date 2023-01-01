@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
+	trace "github.com/eniac/Beldi/pkg/trace"
 	"github.com/mitchellh/mapstructure"
-	"github.com/pkg/errors"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
@@ -53,6 +53,7 @@ func LibRead(tablename string, key aws.JSONValue, projection []string) aws.JSONV
 	return item
 }
 
+// Put only if the key not exists.
 func LibPut(tablename string, key aws.JSONValue, values aws.JSONValue) bool {
 	Key, err := dynamodbattribute.MarshalMap(key)
 	CHECK(err)
@@ -82,11 +83,13 @@ func LibPut(tablename string, key aws.JSONValue, values aws.JSONValue) bool {
 	if err == nil {
 		return true
 	} else {
-		AssertConditionFailure(errors.Wrapf(err, "TableName: %v, Key: %v", tablename, Key))
-		return false
+		// AssertConditionFailure(errors.Wrapf(err, "TableName: %v, Key: %v", tablename, Key))
+		AssertConditionFailure(err)
+		return false // Failed because the key exists.
 	}
 }
 
+// Put without any check.
 func LibWrite(tablename string, key aws.JSONValue, update map[expression.NameBuilder]expression.OperandBuilder) {
 	Key, err := dynamodbattribute.MarshalMap(key)
 	CHECK(err)
@@ -250,7 +253,36 @@ func LibDelete(tablename string, key aws.JSONValue) {
 	}
 }
 
+// 1. Read a value from `tablename` where the value is writen by EOSWrite.EOSWriteWithRow
+// sometime.
+//
+// 2. Then check the env.LogTable if current Read had performed. If so, read from log.
+//
+// The 2., that to check if the read had been logged, should be executed first, or the
+// Read operation in 1. would be a waste if the read is logged.
+// It's so weird in Beldi and it has been optimized in Boki.
+//
+// Note that there are 2 tables: `tablename` and `env.LogTable`, where
+// `tablename` is the table of Write logs, also the DAAL;
+// `env.LogTable` is a separate table of Read logs, there's no DAAL here;
+//
+// The DAAL is a linked list, all the writes are performed in their time order, so the
+// last write must be at the tail row, where this EOSReadWithRow should perform.
+//
+// Assume that most part of Reads are normal requests and will be performed on the DAAL,
+// all of them are iterating to the tail, which is an unnecessary heavy overhead and
+// can be optimized by a cyclic list.
+// Besides, due to the read log(env.LogTable) is a separate table and no DAAL here, so
+// there's no need to optimize the read key searching.
 func EOSReadWithRow(env *Env, tablename string, key string, projection []string, row string) aws.JSONValue {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("EOSReadWithRow table: %v, key: %v, row: %v", tablename, key, row))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	var metas []string
 	if len(projection) == 0 {
 		metas = []string{}
@@ -258,12 +290,15 @@ func EOSReadWithRow(env *Env, tablename string, key string, projection []string,
 		metas = append(projection, "NEXTROW")
 	}
 	res := LibRead(tablename, aws.JSONValue{"K": key, "ROWHASH": row}, metas)
+	// read the last row of DAAL, where the last EOSWriteWithRow had performed at
 	if nextRow, exists := res["NEXTROW"]; exists {
 		return EOSReadWithRow(env, tablename, key, projection, nextRow.(string))
 	}
+	// last row read
 	for _, column := range RESERVED {
 		delete(res, column)
 	}
+	// res only leaves V now
 	logKey := aws.JSONValue{"InstanceId": env.InstanceId, "StepNumber": env.StepNumber}
 	env.StepNumber += 1
 	if LibPut(env.LogTable, logKey, res) {
@@ -274,6 +309,14 @@ func EOSReadWithRow(env *Env, tablename string, key string, projection []string,
 }
 
 func EOSRead(env *Env, tablename string, key string, projection []string) aws.JSONValue {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("EOSRead table: %v, key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	// ReadLog is not in DAAL, Need Optimization Here
 	last := LastRow(tablename, key)
 	if last == "" {
@@ -292,6 +335,14 @@ func LibReadLatest(tablename string, key string, projection []string, row string
 }
 
 func EOSScan(env *Env, tablename string, projection []string) []aws.JSONValue {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("EOSScan table: %v", tablename))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	var res []aws.JSONValue
 	keys := LibScan(tablename, []string{"K"}, expression.Name("ROWHASH").Equal(expression.Value("HEAD")))
 	for _, key := range keys {
@@ -406,6 +457,14 @@ func InsertHead(tablename string, key string) {
 
 func EOSWriteWithRow(env *Env, tablename string, key string,
 	update map[expression.NameBuilder]expression.OperandBuilder, row string) {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("EOSWriteWithRow table: %v, key: %v, row: %v", tablename, key, row))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	pk, Key := GeneratePK(key, row)
 	cid := fmt.Sprintf("%s-%v", env.InstanceId, env.StepNumber)
 	cidPath := fmt.Sprintf("LOGS.%s", cid)
@@ -455,6 +514,14 @@ func EOSWriteWithRow(env *Env, tablename string, key string,
 }
 
 func QueryCheck(env *Env, tablename string, key string, idx []string) bool {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("QueryCheck table: %v, key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	cid := fmt.Sprintf("%s-%v", env.InstanceId, env.StepNumber)
 	cidPath := fmt.Sprintf("LOGS.%s", cid)
 	filter := expression.Value(false).Equal(expression.Value(true))
@@ -490,7 +557,20 @@ func QueryCheck(env *Env, tablename string, key string, idx []string) bool {
 }
 
 // if done, res, last
+// Returns:
+//
+//	bool: If the key had beed writen before.
+//	bool: The value of cid in LOGS entry.
+//	string: The key of the last row.
 func QuickCheckReturnLast(env *Env, tablename string, key string, isCond bool) (bool, bool, string) {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("QuickCheckReturnLast table: %v, key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	cid := fmt.Sprintf("%s-%v", env.InstanceId, env.StepNumber)
 	cidPath := fmt.Sprintf("LOGS.%s", cid)
 	projection := []string{"ROWHASH", "NEXTROW", cidPath}
@@ -540,6 +620,14 @@ func QuickCheckReturnLast(env *Env, tablename string, key string, isCond bool) (
 }
 
 func QueryCondCheck(env *Env, tablename string, key string, idx []string) (bool, bool) {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("QueryCheck table: %v, key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	cid := fmt.Sprintf("%s-%v", env.InstanceId, env.StepNumber)
 	cidPath := fmt.Sprintf("LOGS.%s", cid)
 	filter := expression.Value(false).Equal(expression.Value(true))
@@ -578,6 +666,14 @@ func QueryCondCheck(env *Env, tablename string, key string, idx []string) (bool,
 
 func EOSWrite(env *Env, tablename string, key string,
 	update map[expression.NameBuilder]expression.OperandBuilder) {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("EOSWrite table: %v, key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	done, _, last := QuickCheckReturnLast(env, tablename, key, false)
 	if done {
 		env.StepNumber += 1
@@ -592,6 +688,14 @@ func EOSWrite(env *Env, tablename string, key string,
 }
 
 func EOSDelete(env *Env, tablename string, key string) {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("EOSDelete table: %v, key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	EOSWrite(env, tablename, key, map[expression.NameBuilder]expression.OperandBuilder{
 		expression.Name("V"): expression.Value(nil),
 	})
@@ -599,6 +703,14 @@ func EOSDelete(env *Env, tablename string, key string) {
 
 func EOSCondWriteWithRow(env *Env, tablename string, key string,
 	update map[expression.NameBuilder]expression.OperandBuilder, cond expression.ConditionBuilder, row string) bool {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("EOSCondWriteWithRow table: %v, key: %v, row: %v", tablename, key, row))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	pk := aws.JSONValue{"K": key, "ROWHASH": row}
 	Key, err := dynamodbattribute.MarshalMap(pk)
 	CHECK(err)
@@ -676,6 +788,14 @@ func EOSCondWriteWithRow(env *Env, tablename string, key string,
 func EOSCondWrite(env *Env, tablename string, key string,
 	update map[expression.NameBuilder]expression.OperandBuilder,
 	cond expression.ConditionBuilder) bool {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("EOSCondWriteWithRow table: %v, key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	done, res, last := QuickCheckReturnLast(env, tablename, key, true)
 	if done {
 		env.StepNumber += 1
@@ -690,6 +810,14 @@ func EOSCondWrite(env *Env, tablename string, key string,
 }
 
 func Read(env *Env, tablename string, key string) interface{} {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("Read table: %v key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	var item aws.JSONValue
 	if TYPE == "BASELINE" {
 		item = LibRead(tablename, aws.JSONValue{"K": key}, []string{"V"})
@@ -705,6 +833,14 @@ func Read(env *Env, tablename string, key string) interface{} {
 
 func Write(env *Env, tablename string, key string,
 	update map[expression.NameBuilder]expression.OperandBuilder) {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("Write table: %v key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	if TYPE == "BASELINE" {
 		LibWrite(tablename, aws.JSONValue{"K": key}, update)
 	} else {
@@ -714,6 +850,14 @@ func Write(env *Env, tablename string, key string,
 
 func CondWrite(env *Env, tablename string, key string,
 	update map[expression.NameBuilder]expression.OperandBuilder, cond expression.ConditionBuilder) bool {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("CondWrite table: %v key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	if TYPE == "BASELINE" {
 		return LibCondWrite(tablename, key, update, cond)
 	} else {
@@ -722,6 +866,14 @@ func CondWrite(env *Env, tablename string, key string,
 }
 
 func Scan(env *Env, tablename string) interface{} {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("Scan table: %v", tablename))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	if TYPE == "BASELINE" {
 		var res []interface{}
 		items := LibScan(tablename, []string{"V"}, expression.Value(true).Equal(expression.Value(true)))
@@ -746,6 +898,14 @@ func Scan(env *Env, tablename string) interface{} {
 }
 
 func TRead(env *Env, tablename string, key string) aws.JSONValue {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("TRead table: %v key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	item := LibRead(tablename, aws.JSONValue{"K": key}, []string{"V"})
 	logKey := aws.JSONValue{"InstanceId": env.InstanceId, "StepNumber": env.StepNumber}
 	env.StepNumber += 1
@@ -756,6 +916,14 @@ func TRead(env *Env, tablename string, key string) aws.JSONValue {
 }
 
 func TWrite(env *Env, tablename string, key string, value string) {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("TWrite table: %v key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	logItem, err := dynamodbattribute.MarshalMap(aws.JSONValue{
 		"InstanceId": env.InstanceId,
 		"StepNumber": env.StepNumber,
@@ -802,6 +970,14 @@ func TWrite(env *Env, tablename string, key string, value string) {
 }
 
 func TCondWrite(env *Env, tablename string, key string, value string, c bool) bool {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("TCondWrite table: %v key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	logItem, err := dynamodbattribute.MarshalMap(aws.JSONValue{
 		"InstanceId": env.InstanceId,
 		"StepNumber": env.StepNumber,
@@ -944,6 +1120,14 @@ func LastRow(tablename string, key string) string {
 }
 
 func TQuery(env *Env, tablename string, key string) interface{} {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("TQuery table: %v key: %v", tablename, key))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	projection := []string{"ROWHASH", "V", "NEXTROW"}
 	cond := expression.Key("K").Equal(expression.Value(key))
 	expr, err := expression.NewBuilder().WithProjection(BuildProjection(projection)).WithKeyCondition(cond).Build()

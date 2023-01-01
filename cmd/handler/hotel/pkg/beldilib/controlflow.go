@@ -1,15 +1,18 @@
 package beldilib
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/pkg/errors"
+
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/dynamodb/expression"
+	trace "github.com/eniac/Beldi/pkg/trace"
 	"github.com/lithammer/shortuuid"
 	"github.com/mitchellh/mapstructure"
 )
@@ -23,6 +26,9 @@ type InputWrapper struct {
 	TxnId       string      `mapstructure:"TxnId"`
 	Instruction string      `mapstructure:"Instruction"`
 	Async       bool        `mapstructure:"Async"`
+
+	// propagate the ctx of parent function to relate trace info together
+	TraceContextCarrier map[string]string `mapstructure:"TraceContextCarrier"`
 }
 
 func (iw *InputWrapper) Serialize() []byte {
@@ -69,7 +75,7 @@ func (ow *OutputWrapper) Serialize() []byte {
 
 func (ow *OutputWrapper) Deserialize(stream []byte) {
 	err := json.Unmarshal(stream, ow)
-	CHECK(err)
+	CHECK(errors.Wrapf(err, "json unmarshal err: %v", string(stream)))
 	if ow.Status != "Success" && ow.Status != "Failure" {
 		ie := InvokeError{}
 		ie.Deserialize(stream)
@@ -101,7 +107,14 @@ func PrepareEnv(iw *InputWrapper) *Env {
 	if iw.InstanceId == "" {
 		iw.InstanceId = shortuuid.New()
 	}
+	ctx := context.Background()
+	if iw.CallerName != "" { // current func is not the root
+		ctx = trace.ExtractTraceContextFromCarrier(iw.TraceContextCarrier)
+	}
+
 	return &Env{
+		Ctx: ctx,
+
 		LambdaId:    lambdaId,
 		InstanceId:  iw.InstanceId,
 		LogTable:    fmt.Sprintf("%s-log", lambdaId),
@@ -115,6 +128,14 @@ func PrepareEnv(iw *InputWrapper) *Env {
 }
 
 func SyncInvoke(env *Env, callee string, input interface{}) (interface{}, string) {
+	originalCtx := env.Ctx
+	ctx, funcSpan := trace.NewSpan(env.Ctx, fmt.Sprintf("SyncInvoke callee: %v", callee))
+	env.Ctx = ctx
+	defer func() {
+		funcSpan.End()
+		env.Ctx = originalCtx
+	}()
+
 	if TYPE == "BASELINE" {
 		iw := InputWrapper{
 			InstanceId:  "",
@@ -123,6 +144,8 @@ func SyncInvoke(env *Env, callee string, input interface{}) (interface{}, string
 			Async:       false,
 			TxnId:       env.TxnId,
 			Instruction: env.Instruction,
+
+			TraceContextCarrier: trace.MakeTraceContextToCarrier(env.Ctx), // for tracer
 		}
 		if iw.Instruction == "EXECUTE" {
 			LibWrite(env.LocalTable, aws.JSONValue{"K": env.TxnId}, map[expression.NameBuilder]expression.OperandBuilder{
@@ -155,11 +178,17 @@ func SyncInvoke(env *Env, callee string, input interface{}) (interface{}, string
 		Input:       input,
 		TxnId:       env.TxnId,
 		Instruction: env.Instruction,
+
+		TraceContextCarrier: trace.MakeTraceContextToCarrier(env.Ctx), // for tracer
 	}
 	pk := aws.JSONValue{"InstanceId": env.InstanceId, "StepNumber": env.StepNumber}
+	_, subSpan1 := trace.NewSpan(env.Ctx, fmt.Sprintf("LibPut pk: %v, callee: %v %v", pk, iw.InstanceId, callee))
 	ok := LibPut(env.LogTable, pk, aws.JSONValue{"Callee": iw.InstanceId})
+	subSpan1.End()
 	if !ok {
+		_, subSpan2 := trace.NewSpan(env.Ctx, fmt.Sprintf("LibRead last result pk: %v", pk))
 		item := LibRead(env.LogTable, pk, []string{"Callee", "RET"})
+		subSpan2.End()
 		if val, exist := item["Callee"].(string); exist {
 			iw.InstanceId = val
 		} else {
@@ -181,7 +210,9 @@ func SyncInvoke(env *Env, callee string, input interface{}) (interface{}, string
 	// 	FunctionName: aws.String(fmt.Sprintf("beldi-dev-%s", callee)),
 	// 	Payload:      payload,
 	// })
+	_, subSpan3 := trace.NewSpan(env.Ctx, fmt.Sprintf("Gateway SyncInvoke callee: %v", callee))
 	res, err := OpenFaaSSyncInvoke(fmt.Sprintf("beldi-dev-%s", callee), payload)
+	subSpan3.End()
 	CHECK(err)
 	ow := OutputWrapper{}
 	// ow.Deserialize(res.Payload)
@@ -195,6 +226,14 @@ func SyncInvoke(env *Env, callee string, input interface{}) (interface{}, string
 }
 
 func AssignedSyncInvoke(env *Env, callee string, input interface{}, stepNumber int32) (interface{}, string) {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("AssignedSyncInvoke callee: %v", callee))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	if TYPE == "BASELINE" {
 		return SyncInvoke(env, callee, input)
 	}
@@ -207,11 +246,17 @@ func AssignedSyncInvoke(env *Env, callee string, input interface{}, stepNumber i
 		Input:       input,
 		TxnId:       env.TxnId,
 		Instruction: env.Instruction,
+
+		TraceContextCarrier: trace.MakeTraceContextToCarrier(env.Ctx), // for tracer
 	}
 	pk := aws.JSONValue{"InstanceId": env.InstanceId, "StepNumber": stepNumber}
+	_, span = trace.NewSpan(env.Ctx, fmt.Sprintf("LibPut pk: %v, callee: %v", pk, iw.InstanceId))
 	ok := LibPut(env.LogTable, pk, aws.JSONValue{"Callee": iw.InstanceId})
+	span.End()
 	if !ok {
+		_, span = trace.NewSpan(env.Ctx, fmt.Sprintf("LibRead last result pk: %v", pk))
 		item := LibRead(env.LogTable, pk, []string{"Callee", "RET"})
+		span.End()
 		if val, exist := item["Callee"].(string); exist {
 			iw.InstanceId = val
 		} else {
@@ -231,7 +276,9 @@ func AssignedSyncInvoke(env *Env, callee string, input interface{}, stepNumber i
 	// 	FunctionName: aws.String(fmt.Sprintf("beldi-dev-%s", callee)),
 	// 	Payload:      payload,
 	// })
+	_, span = trace.NewSpan(env.Ctx, fmt.Sprintf("Gateway SyncInvoke callee: %v", callee))
 	res, err := OpenFaaSSyncInvoke(fmt.Sprintf("beldi-dev-%s", callee), payload)
+	span.End()
 	CHECK(err)
 	ow := OutputWrapper{}
 	// ow.Deserialize(res.Payload)
@@ -245,12 +292,22 @@ func AssignedSyncInvoke(env *Env, callee string, input interface{}, stepNumber i
 }
 
 func AsyncInvoke(env *Env, callee string, input interface{}) string {
+	ctx, span := trace.NewSpan(env.Ctx, fmt.Sprintf("AsyncInvoke callee: %v", callee))
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	if TYPE == "BASELINE" {
 		iw := InputWrapper{
 			InstanceId: "",
 			Async:      true,
 			CallerName: "",
 			Input:      input,
+
+			TraceContextCarrier: trace.MakeTraceContextToCarrier(env.Ctx), // for tracer
 		}
 		payload := iw.Serialize()
 		// _, err := LambdaClient.Invoke(&lambdaSdk.InvokeInput{
@@ -270,12 +327,18 @@ func AsyncInvoke(env *Env, callee string, input interface{}) string {
 		Async:      true,
 		InstanceId: shortuuid.New(),
 		Input:      input,
+
+		TraceContextCarrier: trace.MakeTraceContextToCarrier(env.Ctx), // for tracer
 	}
 
 	pk := aws.JSONValue{"InstanceId": env.InstanceId, "StepNumber": env.StepNumber}
+	_, span = trace.NewSpan(env.Ctx, fmt.Sprintf("LibPut pk: %v, callee: %v", pk, iw.InstanceId))
 	ok := LibPut(env.LogTable, pk, aws.JSONValue{"Callee": iw.InstanceId})
+	span.End()
 	if !ok {
+		_, span = trace.NewSpan(env.Ctx, fmt.Sprintf("LibRead last result pk: %v", pk))
 		item := LibRead(env.LogTable, pk, []string{"Callee", "RET"})
+		span.End()
 		if val, exist := item["Callee"].(string); exist {
 			iw.InstanceId = val
 		} else {
@@ -287,17 +350,21 @@ func AsyncInvoke(env *Env, callee string, input interface{}) string {
 		}
 	}
 
+	_, span = trace.NewSpan(env.Ctx, fmt.Sprintf("LibPut callee: %v", iw.InstanceId))
 	ok = LibPut(fmt.Sprintf("%s-collector", callee), aws.JSONValue{"InstanceId": iw.InstanceId},
 		aws.JSONValue{"DONE": false, "ASYNC": true, "INPUT": iw.Input, "ST": time.Now().Unix()})
+	span.End()
 
 	if !ok {
 		env.StepNumber += 1
 		return iw.InstanceId
 	}
 
+	_, span = trace.NewSpan(env.Ctx, fmt.Sprintf("LibWrite pk: %v", pk))
 	LibWrite(env.LogTable, pk, map[expression.NameBuilder]expression.OperandBuilder{
 		expression.Name("RET"): expression.Value(1),
 	})
+	span.End()
 
 	payload := iw.Serialize()
 	// _, err := LambdaClient.Invoke(&lambdaSdk.InvokeInput{
@@ -305,13 +372,23 @@ func AsyncInvoke(env *Env, callee string, input interface{}) string {
 	// 	Payload:        payload,
 	// 	InvocationType: aws.String("Event"),
 	// })
+	_, span = trace.NewSpan(env.Ctx, fmt.Sprintf("Gateway AsyncInvoke callee: %v", callee))
 	err := OpenFaaSAsyncInvoke(fmt.Sprintf("beldi-dev-%s", callee), payload)
+	span.End()
 	CHECK(err)
 	env.StepNumber += 1
 	return iw.InstanceId
 }
 
 func TPLCommit(env *Env) {
+	ctx, span := trace.NewSpan(env.Ctx, "TPLCommit")
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	item := EOSRead(env, env.LocalTable, env.TxnId, []string{})
 	var callees []string
 	for k, v := range item {
@@ -341,6 +418,14 @@ func TPLCommit(env *Env) {
 }
 
 func TPLAbort(env *Env) {
+	ctx, span := trace.NewSpan(env.Ctx, "TPLAbort")
+	originalCtx := env.Ctx
+	env.Ctx = ctx
+	defer func() {
+		span.End()
+		env.Ctx = originalCtx
+	}()
+
 	item := EOSRead(env, env.LocalTable, env.TxnId, []string{"CALLEES"})
 	var callees []string
 	for k, v := range item {
@@ -372,15 +457,41 @@ func Wrapper(f func(env *Env) interface{}) func(iw []byte) string {
 	return func(raw []byte) string {
 		iw := ParseInput(raw)
 		env := PrepareEnv(iw)
+
+		// Bootstrap tracer.
+		prv, err := trace.NewProvider(trace.ProviderConfig{
+			JaegerEndpoint: TraceReceiverEndpoint,
+			ServiceName:    lambdacontext.FunctionName,
+			ServiceVersion: TraceReceiverServiceVersion,
+			Environment:    TraceReceiverEnvironment,
+			Disabled:       false,
+		})
+		if err != nil {
+			panic(err)
+		}
+		defer prv.Close(env.Ctx)
+
+		originalCtx := env.Ctx
+		ctx, span := trace.NewSpan(env.Ctx, "Wrapper")
+		env.Ctx = ctx
+		defer func() {
+			span.End()
+			env.Ctx = originalCtx
+		}()
+
 		if TYPE != "BASELINE" {
 			if iw.Async == false || iw.CallerName == "" {
+				_, span := trace.NewSpan(ctx, fmt.Sprintf("pre LibPut IntentTable: %v, key: %v", env.IntentTable, env.InstanceId))
 				LibPut(env.IntentTable, aws.JSONValue{"InstanceId": env.InstanceId},
 					aws.JSONValue{"DONE": false, "ASYNC": iw.Async, "INPUT": iw.Input, "ST": time.Now().Unix()})
+				span.End()
 			} else {
+				_, span := trace.NewSpan(ctx, fmt.Sprintf("pre LibWrite IntentTable: %v, key: %v", env.IntentTable, env.InstanceId))
 				LibWrite(env.IntentTable, aws.JSONValue{"InstanceId": env.InstanceId},
 					map[expression.NameBuilder]expression.OperandBuilder{
 						expression.Name("ST"): expression.Value(time.Now().Unix()),
 					})
+				span.End()
 			}
 			//ok := LibPut(env.IntentTable, aws.JSONValue{"InstanceId": env.InstanceId},
 			//	aws.JSONValue{"DONE": false, "ASYNC": iw.Async})
@@ -407,25 +518,39 @@ func Wrapper(f func(env *Env) interface{}) func(iw []byte) string {
 			EOSWrite(env, env.LocalTable, env.TxnId, map[expression.NameBuilder]expression.OperandBuilder{
 				expression.Name("CALLEES"): expression.Value([]string{" "}),
 			})
+			originalCtx := ctx
+			subCtx, span := trace.NewSpan(ctx, "user func")
+			env.Ctx = subCtx
 			output = f(env)
+			span.End()
+			env.Ctx = originalCtx
 		} else {
+			originalCtx := ctx
+			subCtx, span := trace.NewSpan(ctx, "user func")
+			env.Ctx = subCtx
 			output = f(env)
+			span.End()
+			env.Ctx = originalCtx
 		}
 
 		if TYPE != "BASELINE" {
 			if iw.CallerName != "" {
+				_, span := trace.NewSpan(ctx, fmt.Sprintf("pre LibWrite (callback) caller: %v, id: %v, step: %v", iw.CallerName, iw.CallerId, iw.CallerStep))
 				LibWrite(fmt.Sprintf("%s-log", iw.CallerName),
 					aws.JSONValue{"InstanceId": iw.CallerId, "StepNumber": iw.CallerStep},
 					map[expression.NameBuilder]expression.OperandBuilder{
 						expression.Name("RET"): expression.Value(output),
 					})
+				span.End()
 			}
+			_, span := trace.NewSpan(ctx, fmt.Sprintf("pre LibWrite (done) IntentTable: %v, key: %v", env.IntentTable, env.InstanceId))
 			LibWrite(env.IntentTable, aws.JSONValue{"InstanceId": env.InstanceId},
 				map[expression.NameBuilder]expression.OperandBuilder{
 					expression.Name("DONE"): expression.Value(true),
 					expression.Name("TS"):   expression.Value(time.Now().Unix()),
 					//expression.Name("RET"):  expression.Value(output),
 				})
+			span.End()
 		}
 		// return OutputWrapper{
 		// 	Status: "Success",

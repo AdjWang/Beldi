@@ -7,6 +7,7 @@ template = """\
     image: localhost:5001/{0}:latest
     build_args:
       GO111MODULE: on
+      GOPROXY: https://goproxy.cn
 """
 
 # print(template.format("geo"))

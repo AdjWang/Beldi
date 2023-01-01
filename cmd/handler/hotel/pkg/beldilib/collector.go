@@ -2,10 +2,9 @@ package beldilib
 
 import (
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/dynamodb/expression"
-	lambdaSdk "github.com/aws/aws-sdk-go/service/lambda"
 	"time"
+
+	"github.com/aws/aws-sdk-go/service/dynamodb/expression"
 )
 
 func RestartAll(lambdaId string) {
@@ -25,11 +24,12 @@ func RestartAll(lambdaId string) {
 			Input:      input,
 		}
 		payload := iw.Serialize()
-		_, err := LambdaClient.Invoke(&lambdaSdk.InvokeInput{
-			FunctionName:   aws.String(fmt.Sprintf("beldi-dev-%s", lambdaId)),
-			Payload:        payload,
-			InvocationType: aws.String("Event"),
-		})
+		// _, err := LambdaClient.Invoke(&lambdaSdk.InvokeInput{
+		// 	FunctionName:   aws.String(fmt.Sprintf("beldi-dev-%s", lambdaId)),
+		// 	Payload:        payload,
+		// 	InvocationType: aws.String("Event"),
+		// })
+		err := OpenFaaSAsyncInvoke(fmt.Sprintf("beldi-dev-%s", lambdaId), payload)
 		CHECK(err)
 	}
 }
